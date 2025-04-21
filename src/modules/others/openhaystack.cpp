@@ -60,6 +60,9 @@ static esp_ble_adv_params_t ble_adv_params = {
     .adv_filter_policy = ADV_FILTER_ALLOW_SCAN_ANY_CON_ANY,
 };
 
+// Flag to track if openhaystack is active in the background
+bool isOpenHaystackActive = false;
+
 static void esp_gap_cb(esp_gap_ble_cb_event_t event, esp_ble_gap_cb_param_t *param) {
     esp_err_t err;
 
@@ -114,64 +117,110 @@ void drawErrorMessage(esp_err_t status, const char *text) {
     delay(200);
 }
 
-void openhaystack_loop() {
-    for (;;) {
-
-        set_addr_from_key(rnd_addr, public_key_decoded);
-        set_payload_from_key(adv_data, public_key_decoded);
-
-        // ESP_LOGI(LOG_TAG, "using device address: %02x %02x %02x %02x %02x %02x", rnd_addr[0], rnd_addr[1],
-        // rnd_addr[2], rnd_addr[3], rnd_addr[4], rnd_addr[5]);
-        Serial.printf(
-            "using device address: %02x %02x %02x %02x %02x %02x\n",
-            rnd_addr[0],
-            rnd_addr[1],
-            rnd_addr[2],
-            rnd_addr[3],
-            rnd_addr[4],
-            rnd_addr[5]
-        );
-        tft.setCursor(0, 20);
-        tft.println("using device:");
-        tft.printf(
-            "%02x %02x %02x %02x %02x %02x\n",
-            rnd_addr[0],
-            rnd_addr[1],
-            rnd_addr[2],
-            rnd_addr[3],
-            rnd_addr[4],
-            rnd_addr[5]
-        );
-
-        esp_ble_gap_stop_advertising();
-
-        esp_err_t status;
-        // register the scan callback function to the gap module
-        if ((status = esp_ble_gap_register_callback(esp_gap_cb)) != ESP_OK) {
-            // ESP_LOGE(LOG_TAG, "gap register error: %s", esp_err_to_name(status));
-            drawErrorMessage(status, "gap register error");
-        }
-
-        if ((status = esp_ble_gap_set_rand_addr(rnd_addr)) != ESP_OK) {
-            // ESP_LOGE(LOG_TAG, "couldn't set random address: %s", esp_err_to_name(status));
-            drawErrorMessage(status, "couldn't set random address");
-        }
-
-        if ((esp_ble_gap_config_adv_data_raw((uint8_t *)&adv_data, sizeof(adv_data))) != ESP_OK) {
-            // ESP_LOGE(LOG_TAG, "couldn't configure BLE adv: %s", esp_err_to_name(status));
-            drawErrorMessage(status, "couldn't configure BLE adv");
-        }
-
-        // ESP_LOGI(LOG_TAG, "application initialized");
-        delay(2000);
-    }
+/**********************************************************************
+**  Function: stopOpenHaystack
+**  Turn off OpenHaystack broadcasting
+**********************************************************************/
+void stopOpenHaystack() {
+    isOpenHaystackActive = false;
+    esp_ble_gap_stop_advertising();
+    Serial.println("OpenHaystack stopped");
 }
 
-void openhaystack_setup() {
+/**********************************************************************
+**  Function: drawOpenHaystackScreen
+**  Draw information on screen for OpenHaystack.
+**********************************************************************/
+void drawOpenHaystackScreen() {
     tft.fillScreen(bruceConfig.bgColor);
     tft.setCursor(0, 0);
     tft.setTextColor(TFT_GREEN, bruceConfig.bgColor);
     tft.println("Running openhaystack");
+    tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
+    
+    tft.setCursor(0, 20);
+    tft.println("using device:");
+    tft.printf(
+        "%02x %02x %02x %02x %02x %02x\n",
+        rnd_addr[0],
+        rnd_addr[1],
+        rnd_addr[2],
+        rnd_addr[3],
+        rnd_addr[4],
+        rnd_addr[5]
+    );
+    
+#if defined(HAS_TOUCH)
+    TouchFooter();
+#endif
+
+    tft.setTextColor(TFT_RED);
+    tft.drawCentreString("press Esc to stop", tftWidth / 2, tftHeight - 15, 1);
+    tft.setTextColor(bruceConfig.priColor);
+}
+
+/**********************************************************************
+**  Function: openhaystack_loop
+**  Main loop for OpenHaystack broadcasting
+**********************************************************************/
+void openhaystack_loop() {
+    // Set up the device address and payload from the public key
+    set_addr_from_key(rnd_addr, public_key_decoded);
+    set_payload_from_key(adv_data, public_key_decoded);
+    
+    drawOpenHaystackScreen();
+    
+    Serial.printf(
+        "using device address: %02x %02x %02x %02x %02x %02x\n",
+        rnd_addr[0],
+        rnd_addr[1],
+        rnd_addr[2],
+        rnd_addr[3],
+        rnd_addr[4],
+        rnd_addr[5]
+    );
+
+    esp_err_t status;
+    // register the scan callback function to the gap module
+    if ((status = esp_ble_gap_register_callback(esp_gap_cb)) != ESP_OK) {
+        drawErrorMessage(status, "gap register error");
+        return;
+    }
+
+    if ((status = esp_ble_gap_set_rand_addr(rnd_addr)) != ESP_OK) {
+        drawErrorMessage(status, "couldn't set random address");
+        return;
+    }
+
+    if ((status = esp_ble_gap_config_adv_data_raw((uint8_t *)&adv_data, sizeof(adv_data))) != ESP_OK) {
+        drawErrorMessage(status, "couldn't configure BLE adv");
+        return;
+    }
+    
+    isOpenHaystackActive = true;
+    
+    while (isOpenHaystackActive && !check(EscPress)) {
+        // Keep broadcasting and check for escape key
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+    
+    bool closeHaystack = false;
+    
+    // Only show menu if user pressed escape
+    if (check(EscPress)) {
+      stopOpenHaystack();
+    }
+}
+
+/**********************************************************************
+**  Function: openhaystack_setup
+**  Initialize OpenHaystack system
+**********************************************************************/
+void openhaystack_setup() {
+    tft.fillScreen(bruceConfig.bgColor);
+    tft.setCursor(0, 0);
+    tft.setTextColor(TFT_GREEN, bruceConfig.bgColor);
+    tft.println("Setting up openhaystack");
     tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
 
     esp_bt_controller_config_t bt_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
@@ -247,7 +296,7 @@ void openhaystack_setup() {
         Serial.println("Failed to open file");
         tft.println("No pub.key file\nfound on\nthe SD");
         tft.setTextColor(bruceConfig.priColor, bruceConfig.bgColor);
-        delay(60000);
+        delay(5000);
         return;
     }
 
